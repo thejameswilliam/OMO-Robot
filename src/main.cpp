@@ -3,9 +3,37 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "RobotIMU.h"
+#include <Arduino.h>
+#include <TinyGPSPlus.h>
+#include <ESP32Encoder.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "RobotIMU.h"
+#include <Arduino.h>
+#include <TinyGPSPlus.h>
+
+// Helper to convert yaw degrees to cardinal direction
+const char* toCardinal(float deg) {
+  // //print degree to serial
+  // Serial.print("Yaw in degrees: ");
+  // Serial.println(deg);
+  const char* dirs[] = {"N","NE","E","SE","S","SW","W","NW"};
+  return dirs[(int)((((int)deg % 360 + 360) % 360 + 22.5) / 45.0) % 8];
+}
 
 ESP32Encoder encoder;
 
+// Set up the GPS object
+TinyGPSPlus gps;
+
+// Define which serial port we’re using
+#define GPS_RX 16  // Connect to GT-U7 TXD
+#define GPS_TX 17  // Connect to GT-U7 RXD
+
+HardwareSerial gpsSerial(1);  // Use UART1
+
+// OLED display settings
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET    -1
@@ -21,6 +49,9 @@ int graphIndex = 0;
 
 void setup() {
   Serial.begin(115200);
+
+  gpsSerial.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);  // GPS default baud is 9600
+  Serial.println("Starting GPS test...");
 
   // Initialize IMU
   imu.begin();
@@ -61,6 +92,20 @@ void setup() {
 }
 
 void loop() {
+
+
+
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+  }
+
+  // GPS display block removed. See below for OLED output.
+
+
+
+
+
+
   static long lastPos = 0;
   long pos = encoder.getCount();
   long deltaPos = pos - lastPos;
@@ -69,8 +114,7 @@ void loop() {
   // Approximate encoder speed as counts per loop iteration (scaled)
   float encoderSpeed = abs(deltaPos) * 20.0; // scale factor for visibility
 
-  Serial.print("Encoder count: ");
-  Serial.println(pos);
+ 
   // Check for real-time alpha tuning input
   if (Serial.available()) {
     float newAlpha = Serial.parseFloat();
@@ -84,7 +128,7 @@ void loop() {
   }
 
   unsigned long now = millis();
-  float dt = (now - lastUpdate) / 1000.0;
+  float dt = min((float)(now - lastUpdate) / 1000.0f, 0.1f);
   lastUpdate = now;
 
   imu.update(dt);
@@ -102,7 +146,11 @@ void loop() {
   display.printf("Pitch: %.2f\n", pitch);
   display.printf("Roll:  %.2f\n", roll);
   display.printf("Yaw:   %.2f\n", yaw);
-
+  display.printf("Lat: %.5f", gps.location.lat());
+  display.printf("\nLng: %.5f", gps.location.lng());
+  display.printf("\nSat: %d", gps.satellites.value());
+  display.printf("\nAlt: %.2fm", gps.altitude.meters());
+  display.printf("\nDir: %s\n", toCardinal(yaw));
   // Draw balance circle
   const int centerX = 100;
   const int centerY = 32;
@@ -145,15 +193,16 @@ void loop() {
   display.display();
 
   int motorSpeed = constrain(abs((int)pitch * 5), 0, 255);
-  if (pitch > 2) {
-    ledcWrite(0, motorSpeed); // RPWM forward
+  // Determine motor direction based on pitch angle
+  if (pitch > 2) {  // Tilted forward
+    ledcWrite(0, motorSpeed); // Move forward
     ledcWrite(1, 0);
-  } else if (pitch < -2) {
+  } else if (pitch < -2) {  // Tilted backward
     ledcWrite(0, 0);
-    ledcWrite(1, motorSpeed); // LPWM reverse
+    ledcWrite(1, motorSpeed); // Move backward
   } else {
     ledcWrite(0, 0);
-    ledcWrite(1, 0);
+    ledcWrite(1, 0); // Stop
   }
 
   delay(50);
